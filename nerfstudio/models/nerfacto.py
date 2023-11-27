@@ -56,9 +56,9 @@ class NerfactoModelConfig(ModelConfig):
     """Nerfacto Model Config"""
 
     _target: Type = field(default_factory=lambda: NerfactoModel)
-    near_plane: float = 0.05
+    near_plane: float = 0.1
     """How far along the ray to start sampling."""
-    far_plane: float = 1000.0
+    far_plane: float = 100.0
     """How far along the ray to stop sampling."""
     background_color: Literal["random", "last_sample", "black", "white"] = "last_sample"
     """Whether to randomize the background color."""

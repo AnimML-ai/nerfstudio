@@ -81,9 +81,11 @@ class DataparserOutputs:
         Args:
             path: path to save transform to
         """
+        filenames = [x.name for x in self.image_filenames]
         data = {
             "transform": self.dataparser_transform.tolist(),
             "scale": float(self.dataparser_scale),
+            "filenames": filenames
         }
         if not path.parent.exists():
             path.parent.mkdir(parents=True)
