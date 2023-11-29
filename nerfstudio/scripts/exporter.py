@@ -18,6 +18,7 @@ Script for exporting NeRF into other formats.
 
 
 from __future__ import annotations
+from gzip import GzipFile
 
 import json
 import os
@@ -41,6 +42,7 @@ from nerfstudio.exporter.exporter_utils import (
     collect_camera_poses,
     generate_point_cloud,
     get_mesh_from_filename,
+    render_trajectory,
 )
 from nerfstudio.exporter.marching_cubes import (
     generate_mesh_with_multires_marching_cubes,
@@ -175,6 +177,43 @@ class ExportPointCloud(Exporter):
         CONSOLE.print("[bold green]:white_check_mark: Saving Point Cloud")
 
 
+@dataclass
+class ExportDepth(Exporter):
+    """
+    Export a Open3D TSDF pointcloud
+    """
+    downscale_factor: int = 4
+    """Downscale the images starting from the resolution used for training."""
+    depth_output_name: str = "depth"
+    """Name of the depth output."""
+    rgb_output_name: str = "rgb"
+    """Name of the RGB output."""
+    
+    def main(self) -> None:
+        """Export mesh"""
+
+        if not self.output_dir.exists():
+            self.output_dir.mkdir(parents=True)
+
+        _, pipeline, _, _ = eval_setup(self.load_config)
+        assert pipeline.datamanager.train_dataset is not None
+        dataparser_outputs = pipeline.datamanager.train_dataset._dataparser_outputs
+        
+        frame_ids = [f.stem for f in dataparser_outputs.image_filenames]
+        cameras = dataparser_outputs.cameras
+        color_images, depth_images = render_trajectory(
+            pipeline,
+            cameras,
+            rgb_output_name=self.rgb_output_name,
+            depth_output_name=self.depth_output_name,
+            rendered_resolution_scaling_factor=1.0 / self.downscale_factor,
+            disable_distortion=True
+        )
+        for frame_id, depth in zip(frame_ids, depth_images):
+            with GzipFile(self.output_dir / f"{frame_id}.npy.gz", "wb") as f:
+                np.save(f, depth[:, :, 0])
+                
+        
 @dataclass
 class ExportTSDFMesh(Exporter):
     """
@@ -476,6 +515,7 @@ Commands = tyro.conf.FlagConversionOff[
         Annotated[ExportPoissonMesh, tyro.conf.subcommand(name="poisson")],
         Annotated[ExportMarchingCubesMesh, tyro.conf.subcommand(name="marching-cubes")],
         Annotated[ExportCameraPoses, tyro.conf.subcommand(name="cameras")],
+        Annotated[ExportDepth, tyro.conf.subcommand(name="depth")]
     ]
 ]
 
