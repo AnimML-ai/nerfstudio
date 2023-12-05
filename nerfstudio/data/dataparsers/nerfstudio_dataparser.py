@@ -350,6 +350,6 @@ class Nerfstudio(DataParser):
             else:
                 self.downscale_factor = self.config.downscale_factor
 
-        if self.downscale_factor > 1:
+        if self.downscale_factor > 1 and downsample_folder_prefix.startswith("images_"):
             return data_dir / f"{downsample_folder_prefix}{self.downscale_factor}" / filepath.name
         return data_dir / filepath
