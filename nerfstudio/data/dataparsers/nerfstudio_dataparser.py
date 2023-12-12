@@ -116,14 +116,15 @@ class Nerfstudio(DataParser):
         width = []
         distort = []
 
-        # sort the frames by fname
-        fnames = []
-        for frame in meta["frames"]:
-            filepath = Path(frame["file_path"])
-            fname = self._get_fname(filepath, data_dir)
-            fnames.append(fname)
-        inds = np.argsort(fnames)
-        frames = [meta["frames"][ind] for ind in inds]
+        # # sort the frames by fname
+        # fnames = []
+        # for frame in meta["frames"]:
+        #     filepath = Path(frame["file_path"])
+        #     fname = self._get_fname(filepath, data_dir)
+        #     fnames.append(fname)
+        # inds = np.argsort(fnames)
+        # frames = [meta["frames"][ind] for ind in inds]
+        frames = meta["frames"]
 
         for frame in frames:
             filepath = Path(frame["file_path"])

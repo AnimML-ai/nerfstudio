@@ -1,3 +1,5 @@
+.vscode/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -187,4 +189,3 @@ camera_paths/
 ._.DS_Store
 */**/.DS_Store
 */**/._.DS_Store
-
