@@ -332,7 +332,7 @@ class Nerfstudio(DataParser):
         data_dir: the directory of the data that contains the transform file
         downsample_folder_prefix: prefix of the newly generated downsampled images
         """
-
+        
         if self.downscale_factor is None:
             if self.config.downscale_factor is None:
                 test_img = Image.open(data_dir / filepath)
@@ -351,6 +351,6 @@ class Nerfstudio(DataParser):
             else:
                 self.downscale_factor = self.config.downscale_factor
 
-        if self.downscale_factor > 1 and downsample_folder_prefix.startswith("images_"):
+        if self.downscale_factor > 1 and (downsample_folder_prefix.startswith("images_") or downsample_folder_prefix.startswith("aot_masks_")):
             return data_dir / f"{downsample_folder_prefix}{self.downscale_factor}" / filepath.name
         return data_dir / filepath

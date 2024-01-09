@@ -34,7 +34,7 @@ from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttrib
 from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.field_components.spatial_distortions import SceneContraction
 from nerfstudio.fields.density_fields import HashMLPDensityField
-from nerfstudio.fields.nerfacto_field import NerfactoField
+from nerfstudio.fields.mask_nerfacto_field import MaskNerfactoField
 from nerfstudio.model_components.losses import (
     MSELoss,
     distortion_loss,
@@ -44,18 +44,18 @@ from nerfstudio.model_components.losses import (
     scale_gradients_by_distance_squared,
 )
 from nerfstudio.model_components.ray_samplers import ProposalNetworkSampler, UniformSampler
-from nerfstudio.model_components.renderers import AccumulationRenderer, DepthRenderer, NormalsRenderer, RGBRenderer
-from nerfstudio.model_components.scene_colliders import NearFarCollider, SphereCollider
+from nerfstudio.model_components.renderers import AccumulationRenderer, DepthRenderer, NormalsRenderer, RGBRenderer, SemanticRenderer
+from nerfstudio.model_components.scene_colliders import SphereCollider
 from nerfstudio.model_components.shaders import NormalsShader
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps
 
 
 @dataclass
-class NerfactoModelConfig(ModelConfig):
+class MaskNerfactoModelConfig(ModelConfig):
     """Nerfacto Model Config"""
 
-    _target: Type = field(default_factory=lambda: NerfactoModel)
+    _target: Type = field(default_factory=lambda: MaskNerfactoModel)
     near_plane: float = 0.1
     """How far along the ray to start sampling."""
     far_plane: float = 100.0
@@ -129,16 +129,15 @@ class NerfactoModelConfig(ModelConfig):
     """Dimension of the appearance embedding."""
     camera_optimizer: CameraOptimizerConfig = CameraOptimizerConfig(mode="SO3xR3")
     """Config of the camera optimizer to use"""
-    collider: str = "nearfar"
 
-class NerfactoModel(Model):
+class MaskNerfactoModel(Model):
     """Nerfacto model
 
     Args:
         config: Nerfacto configuration to instantiate model
     """
 
-    config: NerfactoModelConfig
+    config: MaskNerfactoModelConfig
 
     def populate_modules(self):
         """Set the fields and modules."""
@@ -150,7 +149,7 @@ class NerfactoModel(Model):
             scene_contraction = SceneContraction(order=float("inf"))
 
         # Fields
-        self.field = NerfactoField(
+        self.field = MaskNerfactoField(
             self.scene_box.aabb,
             hidden_dim=self.config.hidden_dim,
             num_levels=self.config.num_levels,
@@ -221,15 +220,11 @@ class NerfactoModel(Model):
         )
 
         # Collider
-        if self.config.collider == "sphere":
-            self.collider = SphereCollider(
-                center=torch.Tensor([0, 0, 0]),
-                radius=1.,
-                near_plane=self.config.near_plane
-            )
-        else:
-            self.collider = NearFarCollider(near_plane=self.config.near_plane, far_plane=self.config.far_plane)
-            
+        self.collider = SphereCollider(
+            center=torch.Tensor([0, 0, 0]),
+            radius=1.0,
+            near_plane=self.config.near_plane
+        )
 
         # renderers
         self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
@@ -243,16 +238,22 @@ class NerfactoModel(Model):
 
         # losses
         self.rgb_loss = MSELoss()
+        self.mask_loss = MSELoss()
         self.step = 0
         # metrics
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.ssim = structural_similarity_index_measure
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
         self.step = 0
+        
+        for param in self.field.parameters():
+            param.requires_grad = False
+        for param in self.field.mlp_semantics.parameters():
+            param.requires_grad = True
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {}
-        param_groups["proposal_networks"] = list(self.proposal_networks.parameters())
+        # param_groups["proposal_networks"] = list(self.proposal_networks.parameters())
         param_groups["fields"] = list(self.field.parameters())
         self.camera_optimizer.get_param_groups(param_groups=param_groups)
         return param_groups
@@ -302,19 +303,25 @@ class NerfactoModel(Model):
         field_outputs = self.field.forward(ray_samples, compute_normals=self.config.predict_normals)
         if self.config.use_gradient_scaling:
             field_outputs = scale_gradients_by_distance_squared(field_outputs, ray_samples)
-
-        weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
+        weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY] * field_outputs[FieldHeadNames.SEMANTICS])
         weights_list.append(weights)
         ray_samples_list.append(ray_samples)
 
-        rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights)
+        
+        # segmentation = self.render_segmentation(semantics=field_outputs[FieldHeadNames.SEMANTICS], weights=weights)
+        rgb = self.renderer_rgb(
+            rgb=field_outputs[FieldHeadNames.RGB],
+            weights=weights
+        )
         with torch.no_grad():
             depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
+        
         expected_depth = self.renderer_expected_depth(weights=weights, ray_samples=ray_samples)
         accumulation = self.renderer_accumulation(weights=weights)
 
         outputs = {
             "rgb": rgb,
+            "segmentation": (accumulation > 0.5).float(),
             "accumulation": accumulation,
             "depth": depth,
             "expected_depth": expected_depth,
