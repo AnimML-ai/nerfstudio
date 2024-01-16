@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Literal, Optional, Type
 
 import numpy as np
+import open3d as o3d
 import torch
 from PIL import Image
 
@@ -28,10 +29,10 @@ from nerfstudio.cameras.cameras import CAMERA_MODEL_TO_TYPE, Cameras, CameraType
 from nerfstudio.data.dataparsers.base_dataparser import DataParser, DataParserConfig, DataparserOutputs
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.data.utils.dataparsers_utils import (
+    get_train_eval_split_all,
     get_train_eval_split_filename,
     get_train_eval_split_fraction,
     get_train_eval_split_interval,
-    get_train_eval_split_all,
 )
 from nerfstudio.utils.io import load_from_json
 from nerfstudio.utils.rich_utils import CONSOLE
@@ -61,7 +62,7 @@ class NerfstudioDataParserConfig(DataParserConfig):
     """Whether to automatically scale the poses to fit in +/- 1 bounding box."""
     eval_mode: Literal["fraction", "filename", "interval", "all"] = "fraction"
     """
-    The method to use for splitting the dataset into train and eval. 
+    The method to use for splitting the dataset into train and eval.
     Fraction splits based on a percentage for train and the remaining for eval.
     Filename splits based on filenames containing train/eval.
     Interval uses every nth frame for eval.
@@ -104,10 +105,11 @@ class Nerfstudio(DataParser):
         height_fixed = "h" in meta
         width_fixed = "w" in meta
         distort_fixed = False
-        for distort_key in ["k1", "k2", "k3", "p1", "p2"]:
+        for distort_key in ["k1", "k2", "k3", "p1", "p2", "distortion_params"]:
             if distort_key in meta:
                 distort_fixed = True
                 break
+        fisheye_crop_radius = meta.get("fisheye_crop_radius", None)
         fx = []
         fy = []
         cx = []
@@ -150,7 +152,9 @@ class Nerfstudio(DataParser):
                 width.append(int(frame["w"]))
             if not distort_fixed:
                 distort.append(
-                    camera_utils.get_distortion_params(
+                    torch.tensor(frame["distortion_params"], dtype=torch.float32)
+                    if "distortion_params" in frame
+                    else camera_utils.get_distortion_params(
                         k1=float(frame["k1"]) if "k1" in frame else 0.0,
                         k2=float(frame["k2"]) if "k2" in frame else 0.0,
                         k3=float(frame["k3"]) if "k3" in frame else 0.0,
@@ -176,15 +180,11 @@ class Nerfstudio(DataParser):
                 depth_fname = self._get_fname(depth_filepath, data_dir, downsample_folder_prefix="depths_")
                 depth_filenames.append(depth_fname)
 
-        assert len(mask_filenames) == 0 or (
-            len(mask_filenames) == len(image_filenames)
-        ), """
+        assert len(mask_filenames) == 0 or (len(mask_filenames) == len(image_filenames)), """
         Different number of image and mask filenames.
         You should check that mask_path is specified for every frame (or zero frames) in transforms.json.
         """
-        assert len(depth_filenames) == 0 or (
-            len(depth_filenames) == len(image_filenames)
-        ), """
+        assert len(depth_filenames) == 0 or (len(depth_filenames) == len(image_filenames)), """
         Different number of image and depth filenames.
         You should check that depth_file_path is specified for every frame (or zero frames) in transforms.json.
         """
@@ -275,17 +275,22 @@ class Nerfstudio(DataParser):
         height = int(meta["h"]) if height_fixed else torch.tensor(height, dtype=torch.int32)[idx_tensor]
         width = int(meta["w"]) if width_fixed else torch.tensor(width, dtype=torch.int32)[idx_tensor]
         if distort_fixed:
-            distortion_params = camera_utils.get_distortion_params(
-                k1=float(meta["k1"]) if "k1" in meta else 0.0,
-                k2=float(meta["k2"]) if "k2" in meta else 0.0,
-                k3=float(meta["k3"]) if "k3" in meta else 0.0,
-                k4=float(meta["k4"]) if "k4" in meta else 0.0,
-                p1=float(meta["p1"]) if "p1" in meta else 0.0,
-                p2=float(meta["p2"]) if "p2" in meta else 0.0,
+            distortion_params = (
+                torch.tensor(meta["distortion_params"], dtype=torch.float32)
+                if "distortion_params" in meta
+                else camera_utils.get_distortion_params(
+                    k1=float(meta["k1"]) if "k1" in meta else 0.0,
+                    k2=float(meta["k2"]) if "k2" in meta else 0.0,
+                    k3=float(meta["k3"]) if "k3" in meta else 0.0,
+                    k4=float(meta["k4"]) if "k4" in meta else 0.0,
+                    p1=float(meta["p1"]) if "p1" in meta else 0.0,
+                    p2=float(meta["p2"]) if "p2" in meta else 0.0,
+                )
             )
         else:
             distortion_params = torch.stack(distort, dim=0)[idx_tensor]
 
+        metadata = {"fisheye_crop_radius": fisheye_crop_radius} if fisheye_crop_radius is not None else None
         cameras = Cameras(
             fx=fx,
             fy=fy,
@@ -296,6 +301,7 @@ class Nerfstudio(DataParser):
             width=width,
             camera_to_worlds=poses[:, :3, :4],
             camera_type=camera_type,
+            metadata=metadata,
         )
 
         assert self.downscale_factor is not None
@@ -310,6 +316,12 @@ class Nerfstudio(DataParser):
             applied_scale = float(meta["applied_scale"])
             scale_factor *= applied_scale
 
+        # Load 3D points
+        metadata = {}
+        if "ply_file_path" in meta:
+            ply_file_path = data_dir / meta["ply_file_path"]
+            metadata.update(self._load_3D_points(ply_file_path, transform_matrix, scale_factor))
+
         dataparser_outputs = DataparserOutputs(
             image_filenames=image_filenames,
             cameras=cameras,
@@ -320,9 +332,33 @@ class Nerfstudio(DataParser):
             metadata={
                 "depth_filenames": depth_filenames if len(depth_filenames) > 0 else None,
                 "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
+                **metadata,
             },
         )
         return dataparser_outputs
+
+    def _load_3D_points(self, ply_file_path: Path, transform_matrix: torch.Tensor, scale_factor: float):
+        pcd = o3d.io.read_point_cloud(str(ply_file_path))
+
+        points3D = torch.from_numpy(np.asarray(pcd.points, dtype=np.float32))
+        points3D = (
+            torch.cat(
+                (
+                    points3D,
+                    torch.ones_like(points3D[..., :1]),
+                ),
+                -1,
+            )
+            @ transform_matrix.T
+        )
+        points3D *= scale_factor
+        points3D_rgb = torch.from_numpy((np.asarray(pcd.colors) * 255).astype(np.uint8))
+
+        out = {
+            "points3D_xyz": points3D,
+            "points3D_rgb": points3D_rgb,
+        }
+        return out
 
     def _get_fname(self, filepath: Path, data_dir: Path, downsample_folder_prefix="images_") -> Path:
         """Get the filename of the image file.
