@@ -84,6 +84,15 @@ class InputDataset(Dataset):
             image_idx: The image index in the dataset.
         """
         image = torch.from_numpy(self.get_numpy_image(image_idx).astype("float32") / 255.0)
+        if self.metadata.get("alpha_filenames") is not None:
+            pil_alpha = Image.open(self.metadata["alpha_filenames"][image_idx]).convert("L")
+            if self.scale_factor != 1.0:
+                width, height = pil_alpha.size
+                newsize = (int(width * self.scale_factor), int(height * self.scale_factor))
+                pil_alpha = pil_alpha.resize(newsize, resample=Image.NEAREST)
+            alpha = torch.from_numpy(np.array(pil_alpha).astype("float32") / 255.0)
+            alpha = alpha.unsqueeze(-1)
+            image = torch.cat([image, alpha], dim=-1)
         if self._dataparser_outputs.alpha_color is not None and image.shape[-1] == 4:
             image = image[:, :, :3] * image[:, :, -1:] + self._dataparser_outputs.alpha_color * (1.0 - image[:, :, -1:])
         return image

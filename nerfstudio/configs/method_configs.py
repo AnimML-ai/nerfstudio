@@ -35,6 +35,7 @@ from nerfstudio.data.dataparsers.colmap_dataparser import ColmapDataParserConfig
 from nerfstudio.data.dataparsers.dnerf_dataparser import DNeRFDataParserConfig
 from nerfstudio.data.dataparsers.instant_ngp_dataparser import InstantNGPDataParserConfig
 from nerfstudio.data.dataparsers.nerfstudio_dataparser import NerfstudioDataParserConfig
+from nerfstudio.data.dataparsers.animl_dataparser import AnimlDataParserConfig
 from nerfstudio.data.dataparsers.phototourism_dataparser import PhototourismDataParserConfig
 from nerfstudio.data.dataparsers.sdfstudio_dataparser import SDFStudioDataParserConfig
 from nerfstudio.data.dataparsers.sitcoms3d_dataparser import Sitcoms3DDataParserConfig
@@ -86,21 +87,21 @@ descriptions = {
 }
 
 
-method_configs["mask-nerfacto"] = TrainerConfig(
-    method_name="mask-nerfacto",
+method_configs["animlnerfacto"] = TrainerConfig(
+    method_name="nerfacto",
     steps_per_eval_batch=20000,
     steps_per_save=20000,
     max_num_iterations=20000,
     mixed_precision=True,
     pipeline=VanillaPipelineConfig(
         datamanager=VanillaDataManagerConfig(
-            dataparser=NerfstudioDataParserConfig(),
+            dataparser=AnimlDataParserConfig(),
             train_num_rays_per_batch=4096,
             eval_num_rays_per_batch=4096,
         ),
         model=NerfactoModelConfig(
             eval_num_rays_per_chunk=1 << 15,
-            camera_optimizer=CameraOptimizerConfig(mode="off"),
+            camera_optimizer=CameraOptimizerConfig(mode="SO3xR3"),
         ),
     ),
     optimizers={
