@@ -56,14 +56,15 @@ class AnimlDataParserConfig(DataParserConfig):
     """Whether to load mask data"""
     depth_unit_scale_factor: float = 1e-3
     """Scales the depth values to meters. Default value is 0.001 for a millimeter to meter conversion."""
-
+    downscale_factor: Literal[1, 2] = 2
+    """ Use half resolution image or full resolution"""
 
 @dataclass
 class Animl(DataParser):
     """Nerfstudio DatasetParser"""
 
     config: AnimlDataParserConfig
-    downscale_factor: Optional[int] = 1
+    
 
     def _generate_dataparser_outputs(self, split="train"):
         assert self.config.data.exists(), f"Data directory {self.config.data} does not exist."
@@ -88,7 +89,10 @@ class Animl(DataParser):
         distort = []
 
         for frame_id, frame in frames.items():
-            fname = data_dir / "images" / f"{frame_id}.jpg"
+            image_dir_name = "images"
+            if self.config.downscale_factor == 2:
+                image_dir_name = "images_2"
+            fname = data_dir / image_dir_name / f"{frame_id}.jpg"
             K = frame["m_intr_triangulated"]
             fx.append(K[0][0])
             fy.append(K[1][1])
@@ -172,8 +176,7 @@ class Animl(DataParser):
             camera_type=camera_type
         )
 
-        assert self.downscale_factor is not None
-        cameras.rescale_output_resolution(scaling_factor=1.0 / self.downscale_factor)
+        cameras.rescale_output_resolution(scaling_factor=1.0 / self.config.downscale_factor)
 
 
         dataparser_outputs = DataparserOutputs(

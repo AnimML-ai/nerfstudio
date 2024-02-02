@@ -63,16 +63,7 @@ class DepthDataset(InputDataset):
                 self.depths = torch.from_numpy(self.depths).to(device)
             else:
                 depth_tensors = []
-                transforms = self._find_transform(dataparser_outputs.image_filenames[0])
-                data = dataparser_outputs.image_filenames[0].parent
-                if transforms is not None:
-                    meta = json.load(open(transforms, "r"))
-                    frames = meta["frames"]
-                    filenames = [data / frames[j]["file_path"].split("/")[-1] for j in range(len(frames))]
-                else:
-                    meta = None
-                    frames = None
-                    filenames = dataparser_outputs.image_filenames
+                filenames = dataparser_outputs.image_filenames
 
                 repo = "isl-org/ZoeDepth"
                 self.zoe = torch_compile(torch.hub.load(repo, "ZoeD_NK", pretrained=True).to(device))
@@ -116,6 +107,10 @@ class DepthDataset(InputDataset):
         depth_image = get_depth_image_from_path(
             filepath=filepath, height=height, width=width, scale_factor=scale_factor
         )
+        # have the mask channel
+        if data["image"].shape[-1] == 4:
+            mask = (data["image"][..., 3:4] > 0.5).float()
+            depth_image *= mask
 
         return {"depth_image": depth_image}
 
